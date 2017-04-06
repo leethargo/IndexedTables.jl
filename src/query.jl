@@ -282,3 +282,125 @@ function reducedim_vec(f, x::IndexedTable, dims)
 end
 
 reducedim_vec(f, x::IndexedTable, dims::Symbol) = reducedim_vec(f, x, [dims])
+
+function dedup_names(ns)
+    count = Dict{Symbol,Int}()
+    ns1 = copy(ns)
+    for i in length(ns):-1:1
+        if ns[i] in ns[1:i-1]
+            if haskey(count, ns[i])
+                count[ns[i]] += 1
+            else
+                count[ns[i]] = 1
+            end
+            ns1[i] = Symbol(string(ns[i], "_", count[ns[i]]))
+        end
+    end
+    ns1
+end
+
+function mapslices(f, x::IndexedTable, dims; name = nothing)
+    iterdims = setdiff([1:ndims(x);], map(d->fieldindex(x.index.columns,d), dims))
+    idx = Any[Colon() for v in x.index.columns]
+
+    iter = sort(Columns(astuple(x.index.columns)[[iterdims...]]))
+
+    for j in 1:length(iterdims)
+        d = iterdims[j]
+        idx[d] = iter[1][j]
+    end
+    y = f(x[idx...]) # Apply on first slice
+
+    if isa(y, IndexedTable)
+        # this means we need to concatenate outputs into a big IndexedTable
+        ns = vcat(dimlabels(x)[iterdims], dimlabels(y))
+        if !all(x->isa(x, Symbol), ns)
+            ns = nothing
+        else
+            ns = dedup_names(ns)
+        end
+        n = length(y)
+        index_first = similar(iter, n)
+        for j=1:n
+            @inbounds index_first[j] = iter[1]
+        end
+        index = Columns(index_first.columns..., astuple(y.index.columns)...; names=ns)
+        data = copy(y.data)
+        output = IndexedTable(index, data)
+        _mapslices_itable!(f, output, x, iter, iterdims, 1)
+    else
+        ns = dimlabels(x)[iterdims]
+        if !all(x->isa(x, Symbol), ns)
+            ns = nothing
+        end
+        index = Columns(iter[1:1].columns...; names=ns)
+        if name === nothing
+            output = IndexedTable(index, [y])
+        else
+            output = IndexedTable(index, Columns([y], names=[name]))
+        end
+        _mapslices_scalar!(f, output, x, iter, iterdims, 2, name!==nothing ? x->(x,) : identity)
+    end
+end
+
+function _mapslices_scalar!(f, output, x, iter, iterdims, start, coerce)
+    idx = Any[Colon() for v in x.index.columns]
+
+    for i = start:length(iter)
+        if i != 1 && roweq(iter, i-1, i) # We've already visited this slice
+            continue
+        end
+        for j in 1:length(iterdims)
+            d = iterdims[j]
+            idx[d] = iter[i][j]
+        end
+        y = f(x[idx...])
+        push!(output.index, iter[i])
+        push!(output.data, coerce(y))
+    end
+    output
+end
+
+function _mapslices_itable!(f, output, x, iter, iterdims, start)
+    idx = Any[Colon() for v in x.index.columns]
+    I = output.index
+    D = output.data
+    srcdims = length(iterdims)
+
+    l = length(output)
+    for i = start:length(iter)
+        if i != 1 && roweq(iter, i-1, i) # We've already visited this slice
+            continue
+        end
+        for j in 1:length(iterdims)
+            d = iterdims[j]
+            idx[d] = iter[i][j]
+        end
+        y = f(x[idx...])
+        n = length(y)
+        resize!(I, l+n)
+        resize!(D, l+n)
+
+        for k = 1:srcdims
+            ldestcol = I.columns[k]
+            srccol = iter.columns[k]
+            @inbounds for j=l+1:l+n
+                ldestcol[j] = srccol[i]
+            end
+        end
+
+        for k = (srcdims+1):srcdims+length(y.index.columns)
+            ldestcol = I.columns[k]
+            srccol = y.index.columns[k-srcdims]
+            @inbounds for j=l+1:l+n
+                ldestcol[j] = srccol[j-l]
+            end
+        end
+
+        @inbounds for j=l+1:l+n
+            D[j] = y.data[j-l]
+        end
+        l += n
+    end
+    IndexedTable(I,D)
+end
