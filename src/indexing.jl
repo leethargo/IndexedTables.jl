@@ -1,5 +1,9 @@
 # getindex
 
+using IntervalSets
+
+export ClosedInterval, ..
+
 getindex(t::IndexedTable, idxs...) = (flush!(t); _getindex(t, idxs))
 
 _getindex{T,D<:Tuple}(t::IndexedTable{T,D}, idxs::D) = _getindex_scalar(t, idxs)
@@ -15,6 +19,8 @@ end
 _in(x, y) = isa(x,typeof(y)) ? isequal(x, y) : in(x, y)
 _in(x, ::Colon) = true
 _in(x, v::AbstractVector) = (idx=searchsortedfirst(v, x); idx<=length(v) && v[idx]==x)
+_in(x, v::ClosedInterval) = x >= v.left && x <= v.right
+_in(x, v::Range) = x in v
 _in(x, v::AbstractString) = x == v
 _in(x, v::Symbol) = x === v
 _in(x, v::Number) = isequal(x, v)
@@ -28,6 +34,7 @@ import Base: tail
 range_estimate(col, idx) = 1:length(col)
 range_estimate{T}(col::AbstractVector{T}, idx::T) = searchsortedfirst(col, idx):searchsortedlast(col,idx)
 range_estimate(col, idx::AbstractArray) = searchsortedfirst(col,first(idx)):searchsortedlast(col,last(idx))
+range_estimate(col, idx::ClosedInterval) = searchsortedfirst(col, idx.left):searchsortedlast(col, idx.right)
 
 const _fwd = Base.Order.ForwardOrdering()
 
@@ -60,9 +67,28 @@ function _getindex(t::IndexedTable, idxs)
     for idx in idxs
         isa(idx, AbstractVector) && (issorted(idx) || error("indices must be sorted for ranged/vector indexing"))
     end
-    out = convert(Vector{Int32}, range_estimate(I, idxs))
-    filter!(i->row_in(cs, i, idxs), out)
-    IndexedTable(Columns(map(x->x[out], I.columns)), t.data[out], presorted=true)
+
+    estimate = range_estimate(I, idxs)
+    # Columns that need a second look to narrow down indices in estimated range
+    second_lookup = []
+    if !isa(idxs[1], Union{Colon, ClosedInterval})
+        push!(second_lookup, 1)
+    end
+    for i in 2:length(idxs)
+        !isa(idxs[i], Colon) && push!(second_lookup, i)
+    end
+
+    if !isempty(second_lookup)
+        out = convert(Vector{Int32}, estimate)
+        filter_idxs_in!(cs[second_lookup], idxs[second_lookup], out)
+        IndexedTable(Columns(map(x->x[out], I.columns)), t.data[out], presorted=true)
+    else
+        IndexedTable(Columns(map(x->x[estimate], I.columns)), t.data[estimate], presorted=true)
+    end
+end
+
+function filter_idxs_in!(cols, idxs, out)
+    filter!(i->row_in(cols, i, idxs), out)
 end
 
 # iterators over indices - lazy getindex
