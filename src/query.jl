@@ -230,9 +230,11 @@ function convertdim(x::IndexedTable, d::DimName, xlat; agg=nothing, vecagg=nothi
     d2 = map(xlat, cols[d])
     n = fieldindex(cols, d)
     names = nothing
-    if isa(x.index.columns, NamedTuple) && name !== nothing
+    if isa(x.index.columns, NamedTuple)
         names = fieldnames(x.index.columns)
-        names[n] = name
+        if name !== nothing
+            names[n] = name
+        end
     end
     if vecagg !== nothing
         y = IndexedTable(cols[1:n-1]..., d2, cols[n+1:end]..., x.data, copy=false, names=names)

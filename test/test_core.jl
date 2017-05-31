@@ -205,7 +205,7 @@ let x = IndexedTable(Columns(x = [1,2,3], y = [4,5,6], z = [7,8,9]), [10,11,12])
     @test _colnames(select(x, :y)) == [:y]
     @test _colnames(select(x, :x=>a->a>1, :z=>a->a>7)) == names
     @test _colnames(x[1:2, 4:5, 8:9]) == names
-    @test convertdim(x, :y, a->0) == IndexedTable(Columns([1,2,3], [0,0,0], [7,8,9]), [10,11,12])
+    @test convertdim(x, :y, a->0) == IndexedTable(Columns(x=[1,2,3], y=[0,0,0], z=[7,8,9]), [10,11,12])
     @test convertdim(x, :y, a->0, name=:yy) == IndexedTable(Columns(x=[1,2,3], yy=[0,0,0], z=[7,8,9]), [10,11,12])
 end
 
